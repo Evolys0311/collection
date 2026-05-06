@@ -1,1 +1,333 @@
-12374578
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithCustomToken, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+} from 'firebase/firestore';
+import { 
+  Search, Plus, ChevronLeft, 
+  Cpu, Cloud, Zap, Disc, Monitor, LogIn, LogOut, Camera, Calendar
+} from 'lucide-react';
+
+// --- Firebase 配置 ---
+// 注意：apiKey 等資訊將由環境於運行時注入
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'collector-master-evolys';
+
+// --- 初始分類數據 ---
+const DEFAULT_CATEGORIES = [
+  { id: 'cat1', name: '復古機械錶', type: '精密儀器', color: 'bg-cyan-500', icon: '⌚' },
+  { id: 'cat2', name: '黑膠唱片', type: '音訊媒體', color: 'bg-indigo-500', icon: '📻' },
+  { id: 'cat3', name: '稀有球鞋', type: '穿戴裝置', color: 'bg-amber-500', icon: '👟' },
+  { id: 'cat4', name: '遊戲機光碟', type: '數位軟體', color: 'bg-emerald-500', icon: '💿' },
+  { id: 'cat5', name: '世界名著', type: '紙本檔案', color: 'bg-rose-500', icon: '📖' },
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('dashboard');
+  const [activeCategory, setActiveCategory] = useState(null);
+  const [items, setItems] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  // 1. 身份驗證初始化 (遵循規則 3)
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("驗證錯誤:", error);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. 監聽 Firestore 數據 (遵循規則 1 & 2)
+  useEffect(() => {
+    if (!user) return;
+
+    // 路徑：/artifacts/{appId}/users/{userId}/items
+    const itemsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'items');
+    
+    const unsubscribe = onSnapshot(itemsRef, (snapshot) => {
+      const fetchedItems = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setItems(fetchedItems);
+    }, (error) => {
+      console.error("資料讀取錯誤:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- 核心邏輯 ---
+
+  const handleGoogleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Google 登入失敗:", error);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file || !activeCategory) return;
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64String = reader.result;
+      await addItem(base64String);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const addItem = async (imageBase64) => {
+    if (!user || !activeCategory) return;
+    setIsUploading(true);
+    try {
+      const itemsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'items');
+      await addDoc(itemsRef, {
+        catId: activeCategory.id,
+        name: searchQuery || `新收藏 #${items.length + 1}`,
+        date: new Date().toISOString().split('T')[0],
+        price: Math.floor(Math.random() * 10000),
+        rating: 5,
+        condition: '全新',
+        tags: [activeCategory.type],
+        img: imageBase64, // 存儲 Base64 圖片
+        createdAt: new Date()
+      });
+      setSearchQuery('');
+    } catch (error) {
+      console.error("新增失敗:", error);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const stats = useMemo(() => {
+    return {
+      totalValue: items.reduce((acc, curr) => acc + (curr.price || 0), 0),
+      totalCount: items.length
+    };
+  }, [items]);
+
+  const filteredItems = useMemo(() => {
+    let result = items;
+    if (activeCategory) {
+      result = result.filter(item => item.catId === activeCategory.id);
+    }
+    if (searchQuery) {
+      result = result.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }
+    return result;
+  }, [items, activeCategory, searchQuery]);
+
+  if (loading) return (
+    <div className="h-screen w-full flex items-center justify-center bg-[#0a0c10] text-blue-400 font-mono tracking-widest">
+      CONNECTING_TO_CORE_DB...
+    </div>
+  );
+
+  const theme = {
+    bg: 'bg-[#0a0c10]',
+    sidebar: 'bg-[#0f1218]',
+    card: 'bg-[#161b22] border-[#30363d]',
+    text: 'text-[#c9d1d9]',
+    subtext: 'text-[#8b949e]',
+    border: 'border-[#30363d]',
+    accent: 'bg-[#1f6feb] text-white shadow-[0_0_15px_rgba(31,111,235,0.4)]',
+    gridPattern: 'bg-[radial-gradient(#161b22_1px,transparent_1px)] [background-size:20px_20px]'
+  };
+
+  return (
+    <div className={`flex h-screen w-full font-sans ${theme.bg} ${theme.text} ${theme.gridPattern}`}>
+      
+      {/* 側邊欄 */}
+      <aside className={`w-72 flex-shrink-0 flex flex-col border-r-2 ${theme.sidebar} ${theme.border} backdrop-blur-md`}>
+        <div className="p-8 flex items-center gap-4">
+          <div className={`p-2.5 rounded-lg border-2 border-blue-400/50 ${theme.accent}`}>
+            <Cpu size={26} className={isUploading ? "animate-spin" : "animate-pulse"} />
+          </div>
+          <div>
+            <h1 className="text-xl font-black tracking-widest text-white">CORE DB</h1>
+            <p className="text-[10px] text-blue-400 font-mono italic underline">EVOLYS_SYSTEM</p>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-4 space-y-1.5 mt-4">
+          <button 
+            onClick={() => { setView('dashboard'); setActiveCategory(null); }}
+            className={`w-full flex items-center gap-4 px-5 py-3 rounded-lg border-l-4 transition-all ${view === 'dashboard' ? 'border-blue-500 bg-blue-500/10 text-white' : 'border-transparent text-slate-500 hover:bg-slate-800'}`}
+          >
+            <Monitor size={18}/> <span className="text-sm uppercase tracking-widest">中央控制台</span>
+          </button>
+        </nav>
+
+        <div className="p-6 border-t-2 ${theme.border} mt-auto space-y-4">
+          {user && !user.isAnonymous ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-2 bg-blue-500/10 rounded-lg border border-blue-500/30">
+                <img src={user.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${user.uid}`} className="w-8 h-8 rounded border border-blue-400" alt="avatar" />
+                <div className="overflow-hidden">
+                  <p className="text-[10px] font-bold text-blue-400 truncate">{user.displayName || '收藏家'}</p>
+                  <p className="text-[8px] text-slate-500 font-mono truncate">{user.uid}</p>
+                </div>
+                <button onClick={handleLogout} className="ml-auto p-1 text-slate-400 hover:text-white"><LogOut size={14}/></button>
+              </div>
+              <div className={`p-4 rounded-xl ${theme.card} border-2`}>
+                <div className="flex items-center gap-3 mb-2 text-[10px] font-bold text-blue-400 uppercase tracking-widest">
+                  <Cloud size={14} /> CLOUD SYNC ACTIVE
+                </div>
+                <div className="w-full h-1 bg-blue-900 rounded-full overflow-hidden">
+                  <div className="w-full h-full bg-blue-500 animate-pulse shadow-[0_0_8px_#3b82f6]" />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button onClick={handleGoogleLogin} className="w-full py-3 flex items-center justify-center gap-2 rounded-lg bg-white text-black font-bold uppercase tracking-widest text-xs hover:bg-blue-400 transition-all">
+              <LogIn size={14} /> GOOGLE 授權登入
+            </button>
+          )}
+        </div>
+      </aside>
+
+      {/* 主內容區 */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <header className={`h-20 flex items-center justify-between px-10 border-b-2 ${theme.border} ${theme.sidebar}`}>
+          <div className="relative w-[450px]">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="搜尋雲端資料庫中的物件..."
+              className="w-full pl-12 pr-4 py-2.5 rounded-lg bg-black/40 border-2 border-[#30363d] outline-none focus:border-blue-500 font-mono text-sm text-white transition-all"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-6">
+             <div className="px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded text-blue-400 font-mono text-xs">
+               NET WORTH: ${stats.totalValue.toLocaleString()}
+             </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-10">
+          {view === 'dashboard' ? (
+            <div className="space-y-10">
+              <div className="flex justify-between items-end">
+                <div>
+                  <h2 className="text-4xl font-black tracking-tight text-white uppercase italic">檔案磁區</h2>
+                  <p className="text-sm text-slate-500 font-mono mt-2">已連結資料庫: {appId}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                {DEFAULT_CATEGORIES.map(cat => (
+                  <button 
+                    key={cat.id} 
+                    onClick={() => { setActiveCategory(cat); setView('list'); }}
+                    className={`group text-left rounded-xl overflow-hidden border-2 transition-all hover:border-blue-500 hover:shadow-[0_0_20px_rgba(59,130,246,0.1)] ${theme.card}`}
+                  >
+                    <div className={`h-1.5 ${cat.color}`} />
+                    <div className="p-6">
+                      <span className="text-3xl mb-4 block group-hover:scale-110 transition-transform">{cat.icon}</span>
+                      <h3 className="font-black text-sm uppercase tracking-wider text-white">{cat.name}</h3>
+                      <p className="text-[10px] font-mono text-slate-500">{cat.type}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-8">
+              <div className="flex items-center justify-between">
+                <button onClick={() => { setView('dashboard'); setActiveCategory(null); }} className="flex items-center gap-2 text-slate-500 hover:text-blue-400 transition-all font-bold uppercase text-xs tracking-widest">
+                  <ChevronLeft size={20} /> 返回控制中心
+                </button>
+                <div className="flex gap-4">
+                  <label className="cursor-pointer flex items-center gap-2 px-6 py-3 rounded-lg bg-emerald-600 text-white font-bold uppercase tracking-widest text-xs hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-900/20">
+                    <Camera size={16} /> 上傳物件照片 (BASE64)
+                    <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
+                  </label>
+                  <button onClick={() => addItem(null)} className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold uppercase tracking-widest text-xs ${theme.accent}`}>
+                    <Plus size={16} /> 新增文字記錄
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-l-4 border-blue-500 pl-6">
+                <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter">
+                  {activeCategory?.name} <span className="text-slate-600 text-xl font-light font-mono ml-2">// {filteredItems.length} ENTRIES</span>
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8">
+                {filteredItems.map(item => (
+                  <div key={item.id} className={`group rounded-2xl overflow-hidden border-2 transition-all hover:border-blue-500 ${theme.card}`}>
+                    <div className="aspect-square bg-black/50 flex items-center justify-center overflow-hidden border-b border-[#30363d]">
+                      {item.img ? (
+                        <img src={item.img} className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-all" alt={item.name} />
+                      ) : (
+                        <Disc size={48} className="text-slate-800 animate-pulse" />
+                      )}
+                    </div>
+                    <div className="p-6">
+                      <div className="flex justify-between items-start mb-3">
+                        <h4 className="font-black text-sm text-white truncate pr-2 uppercase">{item.name}</h4>
+                        <span className="text-blue-400 font-mono text-xs tracking-tighter">${item.price?.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-2 font-mono text-[10px] text-slate-500">
+                        <Calendar size={12} /> {item.date}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* 上傳中遮罩 */}
+      {isUploading && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center z-50">
+          <Zap size={64} className="text-blue-500 animate-bounce mb-6" />
+          <p className="text-blue-400 font-mono animate-pulse tracking-[0.5em] text-lg uppercase">Uploading_to_Cloud</p>
+        </div>
+      )}
+    </div>
+  );
+}
